@@ -1,12 +1,7 @@
 try:
-    import openai
+    import google.generativeai as genai
 except Exception:
-    openai = None
-
-try:
-    import anthropic
-except Exception:
-    anthropic = None
+    genai = None
 from typing import List, Dict, Any, Optional, AsyncGenerator
 from dataclasses import dataclass, field
 from enum import Enum
@@ -91,79 +86,50 @@ class BaseLLMProvider(ABC):
         pass
 
 
-class OpenAIProvider(BaseLLMProvider):
-    def __init__(self, api_key: str, model: str = "gpt-4o"):
-        # client may be None in environments without openai package
-        self.client = openai.AsyncOpenAI(api_key=api_key) if openai else None
+class GoogleAIProvider(BaseLLMProvider):
+    def __init__(self, api_key: str, model: str = "models/chat-bison-001"):
+        if genai:
+            self.client = genai
+            self.client.configure(api_key=api_key)
+        else:
+            self.client = None
         self.model = model
 
     @retry_with_backoff(max_retries=3)
     async def generate(self, messages: List[Dict], **kwargs) -> str:
+        if not self.client:
+            raise RuntimeError("Google Generative AI client is not available.")
+
         start = time.time()
-        response = await self.client.chat.completions.create(
+        response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=kwargs.get("temperature", 0.7),
-            max_tokens=kwargs.get("max_tokens", 4096),
-            top_p=kwargs.get("top_p", 0.95),
+            max_output_tokens=kwargs.get("max_tokens", 1024),
         )
         latency = (time.time() - start) * 1000
-        logger.info(f"OpenAI {self.model}: {latency:.0f}ms")
-        return response.choices[0].message.content
+        logger.info(f"GoogleAI {self.model}: {latency:.0f}ms")
+
+        content = ""
+        if hasattr(response, "last") and response.last is not None:
+            try:
+                content = response.last.output_text
+            except Exception:
+                try:
+                    content = response.last.response
+                except Exception:
+                    content = str(response.last)
+        elif isinstance(response, dict):
+            content = response.get("output_text") or response.get("response", "")
+        else:
+            content = str(response)
+        return content
 
     async def stream(self, messages: List[Dict], **kwargs) -> AsyncGenerator[str, None]:
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=kwargs.get("temperature", 0.7),
-            max_tokens=kwargs.get("max_tokens", 4096),
-            stream=True,
-        )
-        async for chunk in response:
-            if chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
-
-
-class AnthropicProvider(BaseLLMProvider):
-    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022"):
-        self.client = anthropic.AsyncAnthropic(api_key=api_key) if anthropic else None
-        self.model = model
-
-    @retry_with_backoff(max_retries=3)
-    async def generate(self, messages: List[Dict], **kwargs) -> str:
-        system_msg = ""
-        filtered = []
-        for msg in messages:
-            if msg["role"] == "system":
-                system_msg = msg["content"]
-            else:
-                filtered.append(msg)
-
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=kwargs.get("max_tokens", 4096),
-            system=system_msg,
-            messages=filtered,
-        )
-        return response.content[0].text
-
-    async def stream(self, messages: List[Dict], **kwargs) -> AsyncGenerator[str, None]:
-        system_msg = ""
-        filtered = []
-        for msg in messages:
-            if msg["role"] == "system":
-                system_msg = msg["content"]
-            else:
-                filtered.append(msg)
-
-        async with self.client.messages.stream(
-            model=self.model,
-            max_tokens=kwargs.get("max_tokens", 4096),
-            system=system_msg,
-            messages=filtered,
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
+        text = await self.generate(messages, **kwargs)
+        for i in range(0, len(text), 80):
+            yield text[i : i + 80]
+            await asyncio.sleep(0.01)
 
 
 class FallbackProvider(BaseLLMProvider):
@@ -219,36 +185,24 @@ class LLMOrchestrator:
         self._setup(settings)
 
     def _setup(self, settings):
-        # Prefer real providers when API keys and SDKs are available
-        if settings.OPENAI_API_KEY and openai:
+        # Prefer Google Generative AI when the key is available
+        if settings.GOOGLE_AI_KEY and genai:
             try:
-                gpt4o = OpenAIProvider(settings.OPENAI_API_KEY, "gpt-4o")
-                gpt4o_mini = OpenAIProvider(settings.OPENAI_API_KEY, "gpt-4o-mini")
-                self.providers["gpt4o"] = gpt4o
-                self.providers["gpt4o_mini"] = gpt4o_mini
-            except Exception:
-                pass
+                google_provider = GoogleAIProvider(settings.GOOGLE_AI_KEY, settings.GOOGLE_AI_MODEL)
+                self.providers["google"] = google_provider
+            except Exception as e:
+                logger.warning(f"Failed to initialize Google AI provider: {e}")
 
-        if settings.ANTHROPIC_API_KEY and anthropic:
-            try:
-                claude = AnthropicProvider(settings.ANTHROPIC_API_KEY)
-                self.providers["claude"] = claude
-            except Exception:
-                pass
-
-        # If no real providers available, register a DummyProvider
+        # If no real provider available, register a DummyProvider
         if not self.providers:
             dummy = DummyProvider("dummy")
             self.providers["dummy"] = dummy
-            # map common provider keys to dummy
-            self.providers["gpt4o_mini"] = dummy
-            self.providers["gpt4o"] = dummy
-            self.providers["claude"] = dummy
+            self.providers["google"] = dummy
 
         self.agent_configs = {
-            AgentRole.MASTER_ADVISOR: {"provider": list(self.providers.keys())[0], "temperature": 0.7, "max_tokens": 4096},
-            AgentRole.DSA_EXPERT: {"provider": list(self.providers.keys())[0], "temperature": 0.2, "max_tokens": 4096},
-            AgentRole.SYSTEM_DESIGN: {"provider": list(self.providers.keys())[0], "temperature": 0.5, "max_tokens": 4096},
+            AgentRole.MASTER_ADVISOR: {"provider": list(self.providers.keys())[0], "temperature": 0.7, "max_tokens": 1024},
+            AgentRole.DSA_EXPERT: {"provider": list(self.providers.keys())[0], "temperature": 0.2, "max_tokens": 1024},
+            AgentRole.SYSTEM_DESIGN: {"provider": list(self.providers.keys())[0], "temperature": 0.5, "max_tokens": 1024},
         }
 
         logger.info(f"LLM providers registered: {list(self.providers.keys())}")
@@ -265,7 +219,7 @@ class LLMOrchestrator:
         return provider
 
     async def _route_query(self, query: str, context: AgentContext) -> AgentRole:
-        provider = self._get_provider("gpt4o_mini")
+        provider = self._get_provider(list(self.providers.keys())[0])
         result = await provider.generate(
             [
                 {"role": "system", "content": "Route queries to the most appropriate agent. Respond with only the agent name."},

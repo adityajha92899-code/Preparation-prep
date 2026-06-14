@@ -10,9 +10,8 @@ git branch -M main
 git push -u origin main
 ```
 
-2. In GitHub repository settings -> Secrets -> Actions, add the following secrets if you want live LLM integration:
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
+2. In GitHub repository settings -> Secrets -> Actions, add the following secrets if you want live Google AI integration:
+- `GOOGLE_AI_KEY`
 - `PINECONE_API_KEY` (if used)
 
 3. GitHub Actions will run `.github/workflows/ci.yml` on push/pull requests.
