@@ -1,4 +1,4 @@
-.PHONY: run test seed docker-up lint
+.PHONY: run test seed docker-up frontend
 
 run:
 	venv\Scripts\activate && python -m uvicorn app.main:app --reload --port 8000
@@ -8,6 +8,9 @@ test:
 
 seed:
 	python scripts/seed_kb.py
+
+frontend:
+	cd frontend && npm install
 
 docker-up:
 	docker-compose up --build

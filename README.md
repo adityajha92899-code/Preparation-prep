@@ -33,7 +33,17 @@ venv\Scripts\activate
 python -m pytest -q
 ```
 
-Continuous Integration:
+Frontend setup:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open the app at `http://localhost:3000` and the backend API at `http://localhost:8000/api/v1`.
+
+Docker (recommended for clean local run):
 
 The repository includes a GitHub Actions workflow at `.github/workflows/ci.yml` that runs tests and uploads coverage.
 

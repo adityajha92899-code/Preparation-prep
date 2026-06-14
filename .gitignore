@@ -6,4 +6,3 @@ __pycache__/
 chroma_db/
 /.vscode/
 node_modules/
-frontend/
