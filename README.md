@@ -40,3 +40,14 @@ The repository includes a GitHub Actions workflow at `.github/workflows/ci.yml` 
 Environment:
 
 Copy `.env.example` to `.env` and set `DATABASE_URL` and LLM keys if you want real LLM providers.
+
+Secrets & GitHub:
+
+1. Add your LLM keys to `.env` or GitHub Secrets (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
+2. Push to GitHub and enable Actions to run CI.
+
+Quick demo:
+
+```bash
+python scripts/run_demo.py
+```
